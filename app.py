@@ -1,4 +1,5 @@
 import streamlit as st
+from streamlit.runtime.scriptrunner import get_script_run_ctx
 import time
 import random
 import plotly.graph_objects as go
@@ -6,6 +7,26 @@ from datetime import datetime, timedelta
 
 # Set page config and CSS
 st.set_page_config(page_title="Christmas Spinning Wheel", page_icon="🎄")
+
+# Initialize game state in a persistent way
+if 'game_states' not in st.session_state:
+    st.session_state.game_states = {
+        'active_game': None,
+        'players': set(),
+        'names': [],
+        'current_step': 'waiting',
+        'places': ["FIRST 🥇", "SECOND 🥈", "THIRD 🥉", "LAST 🎁"],
+        'place_index': 0,
+        'rotation': 0,
+        'spinning': False,
+        'animation_frame': 0,
+        'winner_announcement': None,
+        'announcement_time': None
+    }
+
+# Get unique user ID
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = get_script_run_ctx().session_id
 
 def local_css():
     st.markdown("""
@@ -118,126 +139,103 @@ def create_wheel(names, rotation=0):
 def create_spinning_wheel():
     local_css()
     
-    # Initialize shared game state
-    if 'game_id' not in st.session_state:
-        st.session_state.game_id = datetime.now().strftime("%Y%m%d%H%M%S")
-    if 'shared_names' not in st.session_state:
-        st.session_state.shared_names = []
-    if 'current_step' not in st.session_state:
-        st.session_state.current_step = 'input'
-    if 'places' not in st.session_state:
-        st.session_state.places = ["FIRST 🥇", "SECOND 🥈", "THIRD 🥉", "LAST 🎁"]
-    if 'place_index' not in st.session_state:
-        st.session_state.place_index = 0
-    if 'rotation' not in st.session_state:
-        st.session_state.rotation = 0
-    if 'spinning' not in st.session_state:
-        st.session_state.spinning = False
-    if 'animation_frame' not in st.session_state:
-        st.session_state.animation_frame = 0
-    if 'winner_announcement' not in st.session_state:
-        st.session_state.winner_announcement = None
-    if 'announcement_time' not in st.session_state:
-        st.session_state.announcement_time = None
-
     # Christmas decorations
     st.markdown("🎄 ⭐ 🎅 ⭐ 🎄")
     st.title("Christmas Spinning Wheel")
     st.markdown("🎁 ❄️ 🦌 ❄️ 🎁")
 
-    # Show winner announcement if active and handle auto-close
-    if st.session_state.winner_announcement:
+    # Show winner announcement if active
+    if st.session_state.game_states['winner_announcement']:
         current_time = datetime.now()
-        if st.session_state.announcement_time and current_time < st.session_state.announcement_time:
-            st.markdown(st.session_state.winner_announcement, unsafe_allow_html=True)
-            # Force rerun every 100ms to ensure smooth closing
+        if (st.session_state.game_states['announcement_time'] and 
+            current_time < st.session_state.game_states['announcement_time']):
+            st.markdown(st.session_state.game_states['winner_announcement'], unsafe_allow_html=True)
             time.sleep(0.1)
             st.rerun()
         else:
-            st.session_state.winner_announcement = None
-            st.session_state.announcement_time = None
+            st.session_state.game_states['winner_announcement'] = None
+            st.session_state.game_states['announcement_time'] = None
             st.rerun()
 
-    # Input Phase
-    if st.session_state.current_step == 'input':
-        st.markdown("### Enter 4 Names for the Christmas Draw!")
+    # Waiting Room / Player Join Phase
+    if st.session_state.game_states['current_step'] == 'waiting':
+        st.markdown("### Join the Christmas Draw! 🎄")
         
-        col1, col2 = st.columns(2)
-        with col1:
-            for i in range(2):
-                name = st.text_input(f"🎄 Participant {i+1}:", key=f"name_{i}")
-                if name and name not in st.session_state.shared_names:
-                    st.session_state.shared_names = list(dict.fromkeys(
-                        [n for n in st.session_state.shared_names if n != name] + [name]
-                    ))
-
-        with col2:
-            for i in range(2, 4):
-                name = st.text_input(f"🎄 Participant {i+1}:", key=f"name_{i}")
-                if name and name not in st.session_state.shared_names:
-                    st.session_state.shared_names = list(dict.fromkeys(
-                        [n for n in st.session_state.shared_names if n != name] + [name]
-                    ))
-
-        if len(st.session_state.shared_names) == 4:
-            wheel = create_wheel(st.session_state.shared_names)
-            st.plotly_chart(wheel, use_container_width=True, key="preview_wheel")
-            
-            if st.button("🎉 Start Christmas Draw! 🎉", key="start_button"):
-                st.session_state.current_step = 'spin'
+        player_name = st.text_input("Enter your name:", key="player_name")
+        
+        if player_name and st.button("Join Game! 🎅"):
+            if len(st.session_state.game_states['players']) < 4:
+                st.session_state.game_states['players'].add(player_name)
+                st.session_state.game_states['names'].append(player_name)
                 st.rerun()
+            else:
+                st.error("Game is full! Please wait for the next round.")
+
+        # Show current players
+        st.markdown("### Current Players:")
+        for idx, player in enumerate(st.session_state.game_states['names'], 1):
+            st.markdown(f"{idx}. {player} 🎁")
+
+        # Start game when 4 players have joined
+        if len(st.session_state.game_states['players']) == 4:
+            st.success("All players have joined! Starting the game...")
+            st.session_state.game_states['current_step'] = 'spin'
+            wheel = create_wheel(st.session_state.game_states['names'])
+            st.plotly_chart(wheel, use_container_width=True, key="initial_wheel")
+            time.sleep(2)
+            st.rerun()
 
     # Spinning Phase
-    elif st.session_state.current_step == 'spin':
-        if len(st.session_state.shared_names) > 1:
-            # Create a single container for the wheel
+    elif st.session_state.game_states['current_step'] == 'spin':
+        if len(st.session_state.game_states['names']) > 1:
             wheel_container = st.container()
             
             with wheel_container:
-                if not st.session_state.spinning:
-                    wheel = create_wheel(st.session_state.shared_names, st.session_state.rotation)
+                if not st.session_state.game_states['spinning']:
+                    wheel = create_wheel(st.session_state.game_states['names'], 
+                                      st.session_state.game_states['rotation'])
                     st.plotly_chart(wheel, use_container_width=True, 
-                                  key=f"wheel_{st.session_state.place_index}")
+                                  key=f"wheel_{st.session_state.game_states['place_index']}")
                     
-                    if st.button("🎲 Spin the Wheel! 🎲", key=f"spin_button_{st.session_state.place_index}"):
-                        st.session_state.spinning = True
-                        st.session_state.animation_frame = 0
+                    if st.button("🎲 Spin the Wheel! 🎲", 
+                               key=f"spin_button_{st.session_state.game_states['place_index']}"):
+                        st.session_state.game_states['spinning'] = True
+                        st.session_state.game_states['animation_frame'] = 0
                         st.rerun()
 
-                if st.session_state.spinning:
-                    if st.session_state.animation_frame < 30:
-                        st.session_state.rotation = (st.session_state.rotation + 30) % 360
-                        wheel = create_wheel(st.session_state.shared_names, st.session_state.rotation)
+                if st.session_state.game_states['spinning']:
+                    if st.session_state.game_states['animation_frame'] < 30:
+                        st.session_state.game_states['rotation'] = (
+                            st.session_state.game_states['rotation'] + 30) % 360
+                        wheel = create_wheel(st.session_state.game_states['names'], 
+                                          st.session_state.game_states['rotation'])
                         st.plotly_chart(wheel, use_container_width=True, 
-                                      key=f"wheel_{st.session_state.place_index}_{st.session_state.animation_frame}")
-                        st.session_state.animation_frame += 1
+                                      key=f"wheel_{st.session_state.game_states['place_index']}_{st.session_state.game_states['animation_frame']}")
+                        st.session_state.game_states['animation_frame'] += 1
                         time.sleep(0.1)
                         st.rerun()
                     else:
-                        winner = random.choice(st.session_state.shared_names)
+                        winner = random.choice(st.session_state.game_states['names'])
                         
-                        # Only show announcement for first three places
-                        if st.session_state.place_index < 3:
-                            st.session_state.winner_announcement = show_winner_announcement(
-                                winner, st.session_state.places[st.session_state.place_index])
-                            # Set announcement time to 2 seconds
-                            st.session_state.announcement_time = datetime.now() + timedelta(seconds=2)
+                        if st.session_state.game_states['place_index'] < 3:
+                            st.session_state.game_states['winner_announcement'] = show_winner_announcement(
+                                winner, st.session_state.game_states['places'][st.session_state.game_states['place_index']])
+                            st.session_state.game_states['announcement_time'] = datetime.now() + timedelta(seconds=2)
                         
-                        st.session_state.shared_names.remove(winner)
-                        st.session_state.place_index += 1
-                        st.session_state.spinning = False
-                        st.session_state.animation_frame = 0
+                        st.session_state.game_states['names'].remove(winner)
+                        st.session_state.game_states['place_index'] += 1
+                        st.session_state.game_states['spinning'] = False
+                        st.session_state.game_states['animation_frame'] = 0
                         
-                        # Handle last person without announcement
-                        if len(st.session_state.shared_names) == 1:
-                            last_person = st.session_state.shared_names[0]
+                        if len(st.session_state.game_states['names']) == 1:
+                            last_person = st.session_state.game_states['names'][0]
                             st.markdown(f"""
                             <div class='success'>
-                                <h2>🎄 {last_person} comes in {st.session_state.places[st.session_state.place_index]}! 🎄</h2>
+                                <h2>🎄 {last_person} comes in {st.session_state.game_states['places'][st.session_state.game_states['place_index']]}! 🎄</h2>
                                 <h3>🎅 Game Complete! 🎅</h3>
                             </div>
                             """, unsafe_allow_html=True)
-                            st.session_state.shared_names = []
+                            st.session_state.game_states['names'] = []
                         
                         st.rerun()
 
@@ -248,9 +246,21 @@ def create_spinning_wheel():
                 <p>Thank you for participating! Merry Christmas! 🎅</p>
             </div>
             """, unsafe_allow_html=True)
-            if st.button("🎮 Play Again 🎮", key="play_again_button"):
-                for key in st.session_state.keys():
-                    del st.session_state[key]
+            if st.button("🎮 Start New Game 🎮", key="new_game_button"):
+                # Reset game state
+                st.session_state.game_states = {
+                    'active_game': None,
+                    'players': set(),
+                    'names': [],
+                    'current_step': 'waiting',
+                    'places': ["FIRST 🥇", "SECOND 🥈", "THIRD 🥉", "LAST 🎁"],
+                    'place_index': 0,
+                    'rotation': 0,
+                    'spinning': False,
+                    'animation_frame': 0,
+                    'winner_announcement': None,
+                    'announcement_time': None
+                }
                 st.rerun()
 
 if __name__ == "__main__":
